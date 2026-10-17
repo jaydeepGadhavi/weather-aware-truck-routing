@@ -11,68 +11,73 @@ L.Icon.Default.mergeOptions({
 });
 
 const RISK_COLORS = {
-  'Low': '#10b981',
-  'Moderate': '#f59e0b',
-  'High': '#f97316',
-  'Severe': '#ef4444',
-  'No Travel': '#8b5cf6',
+  'Low': '#10b981',        // Emerald Green
+  'Moderate': '#f59e0b',   // Amber Yellow
+  'High': '#f97316',       // Orange
+  'Severe': '#ef4444',     // Crimson Red
+  'No Travel': '#8b5cf6',  // Deep Purple
 };
 
 export default function MapViewer({
   routes = [],
   selectedRouteId,
   onSelectRoute,
-  corridorHeatmap,
-  currentHour = 0,
 }) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const routeLayersRef = useRef([]);
   const checkpointLayersRef = useRef([]);
-  const heatmapLayerRef = useRef(null);
+  const lastFittedRouteRef = useRef(null);
 
-  // Initialize Map
+  // Initialize Map with proper zoom bounds
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
     if (!mapInstanceRef.current) {
       const map = L.map(mapContainerRef.current, {
-        center: [39.8283, -98.5795], // Center of USA
-        zoom: 4,
+        center: [39.8283, -98.5795],
+        zoom: 5,
+        minZoom: 4,      // 🛑 Prevents zooming out into the whole universe
+        maxZoom: 18,     // Allows deep street-level zooming
         zoomControl: false,
       });
 
       L.control.zoom({ position: 'topright' }).addTo(map);
 
-      // Dark theme CartoDB basemap for high-contrast logistics view
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap &copy; CARTO',
+      // Colorful OpenStreetMap with noWrap to prevent world repetition
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
         maxZoom: 19,
-        subdomains: 'abcd',
+        noWrap: true,   // 🛑 Prevents repeated horizontal worlds
       }).addTo(map);
 
       mapInstanceRef.current = map;
-    }
 
-    return () => {
-      // Cleanup on unmount
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
-      }
-    };
+      // Force map to fill 100% of container smoothly without gray empty bars
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 200);
+
+      const resizeObserver = new ResizeObserver(() => {
+        map.invalidateSize();
+      });
+      resizeObserver.observe(mapContainerRef.current);
+
+      return () => {
+        resizeObserver.disconnect();
+      };
+    }
   }, []);
 
-  // Update Route Polylines and Checkpoint Pins
+  // Render Routes and Checkpoints
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || !routes || routes.length === 0) return;
 
-    // Clear previous route polylines
+    // Clear previous layers
     routeLayersRef.current.forEach((layer) => map.removeLayer(layer));
     routeLayersRef.current = [];
 
-    // Clear previous checkpoints
     checkpointLayersRef.current.forEach((layer) => map.removeLayer(layer));
     checkpointLayersRef.current = [];
 
@@ -83,29 +88,39 @@ export default function MapViewer({
       const isRec = route.is_recommended;
       const coords = route.geometry?.coordinates || [];
 
-      // GeoJSON has [lon, lat], Leaflet requires [lat, lon]
       const latLngs = coords.map(([lon, lat]) => [lat, lon]);
       if (latLngs.length === 0) return;
 
-      latLngs.forEach((pt) => allLatLngs.push(pt));
+      if (isSelected) {
+        latLngs.forEach((pt) => allLatLngs.push(pt));
+      }
 
-      // Style line based on whether it is selected/recommended
+      // 1. Outer contrast border (so line never disappears when zooming in over streets!)
+      const outline = L.polyline(latLngs, {
+        color: isSelected ? '#0f172a' : '#475569',
+        weight: isSelected ? 8 : 4,
+        opacity: isSelected ? 0.8 : 0.3,
+      }).addTo(map);
+
+      // 2. Main colorful route line
       const polyline = L.polyline(latLngs, {
         color: isSelected
           ? isRec ? '#10b981' : '#3b82f6'
-          : '#475569',
-        weight: isSelected ? 6 : 3,
-        opacity: isSelected ? 0.95 : 0.45,
-        dashArray: isSelected ? null : '5, 8',
+          : '#94a3b8',
+        weight: isSelected ? 5 : 2.5,
+        opacity: isSelected ? 1 : 0.6,
       }).addTo(map);
 
-      polyline.on('click', () => {
+      const clickHandler = () => {
         if (onSelectRoute) onSelectRoute(route.id);
-      });
+      };
 
-      routeLayersRef.current.push(polyline);
+      outline.on('click', clickHandler);
+      polyline.on('click', clickHandler);
 
-      // Render Checkpoint Markers along the selected route
+      routeLayersRef.current.push(outline, polyline);
+
+      // Render Checkpoints along the active selected route
       if (isSelected && route.checkpoints) {
         route.checkpoints.forEach((cp, idx) => {
           const riskLevel = cp.risk?.overall_risk || 'Low';
@@ -115,12 +130,12 @@ export default function MapViewer({
             radius: riskLevel === 'No Travel' ? 9 : 7,
             fillColor: color,
             color: '#ffffff',
-            weight: 2,
+            weight: 2.5,
             opacity: 1,
-            fillOpacity: 0.9,
+            fillOpacity: 1,
+            zIndexOffset: 1000, // Keeps markers always on top!
           }).addTo(map);
 
-          // Rich diagnostic popup
           const etaFormatted = new Date(cp.eta).toLocaleString('en-US', {
             month: 'short',
             day: 'numeric',
@@ -130,33 +145,33 @@ export default function MapViewer({
           });
 
           const reasonsHtml = (cp.risk?.explanations || [])
-            .map((r) => `<div style="background: rgba(245, 158, 11, 0.12); border-left: 3px solid #f59e0b; padding: 4px 8px; font-size: 11px; margin-top: 6px; border-radius: 4px; color: #fde68a;">${r}</div>`)
+            .map((r) => `<div style="background: rgba(245, 158, 11, 0.15); border-left: 3px solid #d97706; padding: 4px 8px; font-size: 11px; margin-top: 5px; border-radius: 4px; color: #92400e;">${r}</div>`)
             .join('');
 
           const popupContent = `
-            <div style="min-width: 210px; font-family: system-ui, sans-serif; padding: 2px;">
-              <div style="font-weight: 700; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 5px; margin-bottom: 6px; color: #f8fafc;">
+            <div style="min-width: 210px; font-family: system-ui, sans-serif; padding: 2px; color: #0f172a;">
+              <div style="font-weight: 700; font-size: 13px; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px; margin-bottom: 6px;">
                 Checkpoint #${idx + 1} (${cp.distance_from_origin_miles} mi)
               </div>
-              <div style="display: flex; justify-content: space-between; font-size: 11px; margin: 3px 0; color: #cbd5e1;">
-                <span>ETA:</span>
-                <strong style="color: #f8fafc;">${etaFormatted}</strong>
+              <div style="display: flex; justify-content: space-between; font-size: 11px; margin: 3px 0;">
+                <span style="color: #64748b;">ETA:</span>
+                <strong>${etaFormatted}</strong>
               </div>
-              <div style="display: flex; justify-content: space-between; font-size: 11px; margin: 3px 0; color: #cbd5e1;">
-                <span>Risk Level:</span>
+              <div style="display: flex; justify-content: space-between; font-size: 11px; margin: 3px 0;">
+                <span style="color: #64748b;">Risk Level:</span>
                 <span style="color: ${color}; font-weight: 700; text-transform: uppercase;">${riskLevel}</span>
               </div>
-              <div style="display: flex; justify-content: space-between; font-size: 11px; margin: 3px 0; color: #cbd5e1;">
-                <span>Wind Speed:</span>
-                <strong style="color: #f8fafc;">${cp.weather?.wind_speed_mph || 0} mph</strong>
+              <div style="display: flex; justify-content: space-between; font-size: 11px; margin: 3px 0;">
+                <span style="color: #64748b;">Wind Speed:</span>
+                <strong>${cp.weather?.wind_speed_mph || 0} mph</strong>
               </div>
-              <div style="display: flex; justify-content: space-between; font-size: 11px; margin: 3px 0; color: #cbd5e1;">
-                <span>Rain Rate:</span>
-                <strong style="color: #f8fafc;">${cp.weather?.precipitation_in_hr || 0} in/hr</strong>
+              <div style="display: flex; justify-content: space-between; font-size: 11px; margin: 3px 0;">
+                <span style="color: #64748b;">Precipitation:</span>
+                <strong>${cp.weather?.precipitation_in_hr || 0} in/hr</strong>
               </div>
-              <div style="display: flex; justify-content: space-between; font-size: 11px; margin: 3px 0; color: #cbd5e1;">
-                <span>Snowfall:</span>
-                <strong style="color: #f8fafc;">${cp.weather?.snowfall_in_hr || 0} in/hr</strong>
+              <div style="display: flex; justify-content: space-between; font-size: 10px; margin: 3px 0; color: #64748b; border-top: 1px solid #f1f5f9; padding-top: 4px;">
+                <span>Truck Cargo:</span>
+                <strong>${Number(cp.risk?.load_weight_lbs || 0).toLocaleString()} lbs</strong>
               </div>
               ${reasonsHtml}
             </div>
@@ -168,63 +183,17 @@ export default function MapViewer({
       }
     });
 
-    // Auto-fit map to route bounds
-    if (allLatLngs.length > 0) {
-      map.fitBounds(L.latLngBounds(allLatLngs), { padding: [40, 40] });
+    // Auto-fit to route only when the selected route actually changes
+    const routeKey = `${selectedRouteId}_${routes.length}`;
+    if (allLatLngs.length > 0 && lastFittedRouteRef.current !== routeKey) {
+      map.fitBounds(L.latLngBounds(allLatLngs), { padding: [60, 60], maxZoom: 12 });
+      lastFittedRouteRef.current = routeKey;
     }
   }, [routes, selectedRouteId, onSelectRoute]);
 
-  // Update Corridor Weather Heatmap as currentHour scrubs [0..47]
-  useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !corridorHeatmap || !corridorHeatmap.hours_data) return;
-
-    if (heatmapLayerRef.current) {
-      map.removeLayer(heatmapLayerRef.current);
-      heatmapLayerRef.current = null;
-    }
-
-    const points = corridorHeatmap.hours_data[String(currentHour)] || [];
-    if (points.length === 0) return;
-
-    // Use circle markers with gradient opacity for smooth, reliable, high-performance heatmap overlay
-    const heatGroup = L.layerGroup();
-
-    points.forEach((pt) => {
-      const radius = 35000 + pt.intensity * 45000; // Radius in meters
-      const fillColor =
-        pt.intensity > 0.75
-          ? '#ef4444' // Severe
-          : pt.intensity > 0.55
-          ? '#f97316' // High
-          : pt.intensity > 0.35
-          ? '#f59e0b' // Mod
-          : '#3b82f6'; // Calm/Rain
-
-      const circle = L.circle([pt.lat, pt.lng], {
-        radius: radius,
-        fillColor: fillColor,
-        fillOpacity: pt.intensity * 0.45,
-        color: fillColor,
-        weight: 1,
-        opacity: 0.3,
-      });
-
-      circle.bindTooltip(
-        `Corridor Weather at +${currentHour}h: ${pt.wind_mph} mph wind, ${pt.rain_in} in rain`,
-        { sticky: true }
-      );
-
-      heatGroup.addLayer(circle);
-    });
-
-    heatGroup.addTo(map);
-    heatmapLayerRef.current = heatGroup;
-  }, [corridorHeatmap, currentHour]);
-
   return (
-    <div className="relative w-full h-full flex-1">
-      <div ref={mapContainerRef} className="w-full h-full bg-[#0b0f19]" />
+    <div className="relative w-full h-full flex-1 min-h-[450px]">
+      <div ref={mapContainerRef} className="w-full h-full" style={{ minHeight: '100%' }} />
     </div>
   );
 }

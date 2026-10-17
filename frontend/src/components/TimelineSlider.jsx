@@ -24,16 +24,18 @@ export default function TimelineSlider({
   const currentTimestamp =
     timestamps && timestamps[currentHour]
       ? new Date(timestamps[currentHour]).toLocaleString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true,
-        })
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      })
       : `Hour +${currentHour}`;
 
   return (
-    <div className="absolute bottom-4 md:bottom-6 left-1/2 -translate-x-1/2 w-[94%] max-w-3xl bg-slate-950/90 backdrop-blur-xl border border-white/15 rounded-2xl p-3 md:p-4 shadow-2xl z-10 flex flex-col gap-2.5">
+    // Fixed (z-[1000] forces it permanently above Leaflet):
+    <div className="absolute bottom-4 md:bottom-6 left-1/2 -translate-x-1/2 w-[94%] max-w-3xl bg-slate-950/95 backdrop-blur-xl border border-white/20 rounded-2xl p-3 md:p-4 shadow-2xl z-[1000] flex flex-col gap-2.5">
+
       <div className="flex items-center justify-between text-xs">
         <div className="flex items-center gap-2 font-semibold">
           <Flame size={15} className="text-orange-400" />
